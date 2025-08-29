@@ -10,7 +10,6 @@ namespace OidcTool;
 public class OidcService
 {
     private readonly HttpClient _httpClient;
-    private readonly string _redirectUri = "http://localhost:5000/signin-oidc";
     private readonly TokenCache _tokenCache;
 
     public OidcService(HttpClient httpClient)
@@ -19,7 +18,7 @@ public class OidcService
         _tokenCache = new TokenCache();
     }
 
-    public async Task AcquireTokenAsync(string authority, string clientId, string scope)
+    public async Task AcquireTokenAsync(string authority, string clientId, string scope, string redirectUri)
     {
         try
         {
@@ -27,6 +26,7 @@ public class OidcService
             Console.WriteLine($"Authority: {authority}");
             Console.WriteLine($"Client ID: {clientId}");
             Console.WriteLine($"Scope: {scope}");
+            Console.WriteLine($"Redirect URI: {redirectUri}");
             Console.WriteLine();
 
             // Check cache first
@@ -64,7 +64,7 @@ public class OidcService
             var state = Guid.NewGuid().ToString("N");
             
             // Build authorization URL
-            var authUrl = BuildAuthorizationUrl(discoveryDocument.AuthorizationEndpoint, clientId, scope, state);
+            var authUrl = BuildAuthorizationUrl(discoveryDocument.AuthorizationEndpoint, clientId, scope, state, redirectUri);
             
             Console.WriteLine("Opening browser for authentication...");
             Console.WriteLine($"Authorization URL: {authUrl}");
@@ -72,7 +72,20 @@ public class OidcService
 
             // Start local HTTP listener for callback
             var callbackListener = new HttpListener();
-            callbackListener.Prefixes.Add("http://localhost:5000/");
+            
+            // Parse redirect URI to get the correct prefix
+            try
+            {
+                var uri = new Uri(redirectUri);
+                var prefix = $"{uri.Scheme}://{uri.Host}:{uri.Port}/";
+                callbackListener.Prefixes.Add(prefix);
+            }
+            catch
+            {
+                // Fallback to default
+                callbackListener.Prefixes.Add("http://localhost:5000/");
+            }
+            
             callbackListener.Start();
 
             // Open browser
@@ -232,14 +245,14 @@ public class OidcService
         }
     }
 
-    private string BuildAuthorizationUrl(string authorizationEndpoint, string clientId, string scope, string state)
+    private string BuildAuthorizationUrl(string authorizationEndpoint, string clientId, string scope, string state, string redirectUri)
     {
         var queryParams = new Dictionary<string, string>
         {
             ["response_type"] = "token",
             ["response_mode"] = "form_post",
             ["client_id"] = clientId,
-            ["redirect_uri"] = _redirectUri,
+            ["redirect_uri"] = redirectUri,
             ["scope"] = scope,
             ["state"] = state,
             ["nonce"] = Guid.NewGuid().ToString("N")

@@ -46,13 +46,14 @@ func main() {
 	}
 
 	// For commands that need flags, create a new FlagSet and parse remaining args
-	var authority, clientID, scope string
+	var authority, clientID, scope, redirectURI string
 	var help, version bool
 
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	fs.StringVar(&authority, "authority", "", "The OIDC authority URL")
 	fs.StringVar(&clientID, "client-id", "", "The OIDC client ID")
 	fs.StringVar(&scope, "scope", "", "The requested scope")
+	fs.StringVar(&redirectURI, "redirect-uri", "http://localhost:5000/signin-oidc", "The OIDC redirect URI")
 	fs.BoolVar(&help, "help", false, "Show help")
 	fs.BoolVar(&version, "version", false, "Show version")
 
@@ -91,7 +92,7 @@ func main() {
 			printUsage()
 			os.Exit(1)
 		}
-		if err := oidcService.AcquireToken(authority, clientID, scope); err != nil {
+		if err := oidcService.AcquireToken(authority, clientID, scope, redirectURI); err != nil {
 			log.Fatalf("Error acquiring token: %v", err)
 		}
 
@@ -123,11 +124,13 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  help         Show this help message\n")
 	fmt.Fprintf(os.Stderr, "  version      Show version information\n\n")
 	fmt.Fprintf(os.Stderr, "Flags for token and remove-token commands:\n")
-	fmt.Fprintf(os.Stderr, "  --authority string    The OIDC authority URL\n")
-	fmt.Fprintf(os.Stderr, "  --client-id string    The OIDC client ID\n")
-	fmt.Fprintf(os.Stderr, "  --scope string        The requested scope\n\n")
+	fmt.Fprintf(os.Stderr, "  --authority string      The OIDC authority URL\n")
+	fmt.Fprintf(os.Stderr, "  --client-id string      The OIDC client ID\n")
+	fmt.Fprintf(os.Stderr, "  --scope string          The requested scope\n")
+	fmt.Fprintf(os.Stderr, "  --redirect-uri string   The OIDC redirect URI (default: http://localhost:5000/signin-oidc)\n\n")
 	fmt.Fprintf(os.Stderr, "Examples:\n")
 	fmt.Fprintf(os.Stderr, "  %s token --authority \"https://demo.duendesoftware.com\" --client-id \"interactive.public\" --scope \"openid profile\"\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "  %s token --authority \"https://demo.duendesoftware.com\" --client-id \"interactive.public\" --scope \"openid profile\" --redirect-uri \"http://localhost:8080/callback\"\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  %s cache-info\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  %s clear-cache\n", os.Args[0])
 }

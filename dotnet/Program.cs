@@ -32,20 +32,26 @@ class Program
             IsRequired = true
         };
 
+        var redirectUriOption = new Option<string>(
+            name: "--redirect-uri",
+            description: "The OIDC redirect URI",
+            getDefaultValue: () => "http://localhost:5000/signin-oidc");
+
         // Main token command
         var tokenCommand = new Command("token", "Acquire an access token")
         {
             authorityOption,
             clientIdOption,
-            scopeOption
+            scopeOption,
+            redirectUriOption
         };
 
-        tokenCommand.SetHandler(async (authority, clientId, scope) =>
+        tokenCommand.SetHandler(async (authority, clientId, scope, redirectUri) =>
         {
             var host = CreateHost();
             var oidcService = host.Services.GetRequiredService<OidcService>();
-            await oidcService.AcquireTokenAsync(authority, clientId, scope);
-        }, authorityOption, clientIdOption, scopeOption);
+            await oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri);
+        }, authorityOption, clientIdOption, scopeOption, redirectUriOption);
 
         // Cache info command
         var cacheInfoCommand = new Command("cache-info", "Display information about the token cache");
@@ -70,38 +76,43 @@ class Program
         {
             authorityOption,
             clientIdOption,
-            scopeOption
+            scopeOption,
+            redirectUriOption
         };
 
-        removeTokenCommand.SetHandler((authority, clientId, scope) =>
+        removeTokenCommand.SetHandler((authority, clientId, scope, redirectUri) =>
         {
             var host = CreateHost();
             var oidcService = host.Services.GetRequiredService<OidcService>();
             oidcService.RemoveTokenFromCache(authority, clientId, scope);
-        }, authorityOption, clientIdOption, scopeOption);
+        }, authorityOption, clientIdOption, scopeOption, redirectUriOption);
 
         var rootCommand = new RootCommand("OIDC Tool - Acquire access tokens using implicit flow with caching")
         {
             tokenCommand,
             cacheInfoCommand,
             clearCacheCommand,
-            removeTokenCommand
+            removeTokenCommand,
+            authorityOption,
+            clientIdOption,
+            scopeOption,
+            redirectUriOption
         };
 
         // For backward compatibility, if no subcommand is provided, default to token acquisition
-        rootCommand.SetHandler(async (authority, clientId, scope) =>
+        rootCommand.SetHandler(async (authority, clientId, scope, redirectUri) =>
         {
             if (!string.IsNullOrEmpty(authority) && !string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(scope))
             {
                 var host = CreateHost();
                 var oidcService = host.Services.GetRequiredService<OidcService>();
-                await oidcService.AcquireTokenAsync(authority, clientId, scope);
+                await oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri);
             }
             else
             {
                 Console.WriteLine("Use 'oidc-tool --help' to see available commands.");
             }
-        }, authorityOption, clientIdOption, scopeOption);
+        }, authorityOption, clientIdOption, scopeOption, redirectUriOption);
 
         return await rootCommand.InvokeAsync(args);
     }

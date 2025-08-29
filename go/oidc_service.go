@@ -28,24 +28,23 @@ type DiscoveryDocument struct {
 
 // OidcService handles OIDC operations
 type OidcService struct {
-	tokenCache  *TokenCache
-	redirectURI string
+	tokenCache *TokenCache
 }
 
 // NewOidcService creates a new OIDC service instance
 func NewOidcService(tokenCache *TokenCache) *OidcService {
 	return &OidcService{
-		tokenCache:  tokenCache,
-		redirectURI: "http://localhost:5000/signin-oidc",
+		tokenCache: tokenCache,
 	}
 }
 
 // AcquireToken acquires an access token using OIDC implicit flow
-func (s *OidcService) AcquireToken(authority, clientID, scope string) error {
+func (s *OidcService) AcquireToken(authority, clientID, scope, redirectURI string) error {
 	fmt.Println("Starting OIDC token acquisition...")
 	fmt.Printf("Authority: %s\n", authority)
 	fmt.Printf("Client ID: %s\n", clientID)
 	fmt.Printf("Scope: %s\n", scope)
+	fmt.Printf("Redirect URI: %s\n", redirectURI)
 	fmt.Println()
 
 	// Check cache first
@@ -89,7 +88,7 @@ func (s *OidcService) AcquireToken(authority, clientID, scope string) error {
 	}
 
 	// Build authorization URL
-	authURL := s.buildAuthorizationURL(discoveryDocument.AuthorizationEndpoint, clientID, scope, state)
+	authURL := s.buildAuthorizationURL(discoveryDocument.AuthorizationEndpoint, clientID, scope, state, redirectURI)
 
 	fmt.Println("Opening browser for authentication...")
 	fmt.Printf("Authorization URL: %s\n", authURL)
@@ -97,7 +96,7 @@ func (s *OidcService) AcquireToken(authority, clientID, scope string) error {
 
 	// Start local HTTP server for callback
 	callbackData := make(chan map[string]string, 1)
-	server := s.startCallbackServer(callbackData)
+	server := s.startCallbackServer(redirectURI, callbackData)
 	defer server.Shutdown(context.Background())
 
 	// Open browser
@@ -203,14 +202,14 @@ func (s *OidcService) getDiscoveryDocument(authority string) (*DiscoveryDocument
 }
 
 // buildAuthorizationURL builds the authorization URL for implicit flow
-func (s *OidcService) buildAuthorizationURL(authorizationEndpoint, clientID, scope, state string) string {
+func (s *OidcService) buildAuthorizationURL(authorizationEndpoint, clientID, scope, state, redirectURI string) string {
 	nonce, _ := generateRandomString(32)
 
 	params := url.Values{
 		"response_type": {"token"},
 		"response_mode": {"form_post"},
 		"client_id":     {clientID},
-		"redirect_uri":  {s.redirectURI},
+		"redirect_uri":  {redirectURI},
 		"scope":         {scope},
 		"state":         {state},
 		"nonce":         {nonce},
@@ -220,9 +219,41 @@ func (s *OidcService) buildAuthorizationURL(authorizationEndpoint, clientID, sco
 }
 
 // startCallbackServer starts the local HTTP server for callback
-func (s *OidcService) startCallbackServer(callbackData chan<- map[string]string) *http.Server {
+func (s *OidcService) startCallbackServer(redirectURI string, callbackData chan<- map[string]string) *http.Server {
+	// Parse the redirect URI to extract the port
+	parsedURL, err := url.Parse(redirectURI)
+	if err != nil {
+		log.Printf("Failed to parse redirect URI: %v", err)
+		parsedURL = &url.URL{Host: "localhost:5000"} // fallback
+	}
+	
+	// Extract port from the host
+	addr := parsedURL.Host
+	if addr == "" {
+		addr = "localhost:5000"
+	}
+	
+	// If no port specified, add default port 5000
+	if !strings.Contains(addr, ":") {
+		if addr == "localhost" || addr == "127.0.0.1" {
+			addr = addr + ":5000"
+		} else {
+			addr = "localhost:5000"
+		}
+	}
+	
+	// Ensure we listen on the correct address format
+	if !strings.HasPrefix(addr, ":") && strings.Contains(addr, ":") {
+		// If it has host:port, keep as is
+	} else if strings.HasPrefix(addr, ":") {
+		// If it starts with :, keep as is (e.g., ":8080")
+	} else {
+		// Fallback
+		addr = ":5000"
+	}
+	
 	server := &http.Server{
-		Addr: ":5000",
+		Addr: addr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			s.handleCallback(w, r, callbackData)
 		}),
