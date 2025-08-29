@@ -1,0 +1,153 @@
+name: Build and Release Go OIDC Tool
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Verify Go installation
+      run: go version
+    
+    - name: Install UPX for binary compression
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y upx-ucl
+    
+    - name: Set build variables
+      id: build_vars
+      run: |
+        TIMESTAMP=$(date -u '+%Y%m%d-%H%M%S')
+        VERSION="v${TIMESTAMP}"
+        echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+        echo "COMMIT_HASH=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+        echo "BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')" >> $GITHUB_OUTPUT
+    
+    - name: Build for multiple platforms
+      working-directory: ./go
+      run: |
+        # Create build directory
+        mkdir -p ../build
+        
+        # Build variables
+        VERSION="${{ steps.build_vars.outputs.VERSION }}"
+        COMMIT_HASH="${{ steps.build_vars.outputs.COMMIT_HASH }}"
+        BUILD_TIME="${{ steps.build_vars.outputs.BUILD_TIME }}"
+        LDFLAGS="-s -w -X main.Version=${VERSION} -X main.CommitHash=${COMMIT_HASH} -X main.BuildTime=${BUILD_TIME}"
+        
+        # Build for Linux (amd64)
+        echo "Building for Linux amd64..."
+        GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -trimpath -o ../build/oidc-tool-linux-amd64 .
+        upx --best --lzma ../build/oidc-tool-linux-amd64 2>/dev/null || true
+        
+        # Build for Windows (amd64)
+        echo "Building for Windows amd64..."
+        GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -trimpath -o ../build/oidc-tool-windows-amd64.exe .
+        upx --best --lzma ../build/oidc-tool-windows-amd64.exe 2>/dev/null || true
+        
+        # Build for macOS (amd64)
+        echo "Building for macOS amd64..."
+        GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -trimpath -o ../build/oidc-tool-darwin-amd64 .
+        upx --best --lzma ../build/oidc-tool-darwin-amd64 2>/dev/null || true
+        
+        # Build for macOS (arm64)
+        echo "Building for macOS arm64..."
+        GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -trimpath -o ../build/oidc-tool-darwin-arm64 .
+        upx --best --lzma ../build/oidc-tool-darwin-arm64 2>/dev/null || true
+    
+    - name: Show binary sizes
+      working-directory: ./build
+      run: |
+        echo "Binary sizes after compression:"
+        ls -lh * | grep -v checksums.txt
+    
+    - name: Create checksums
+      working-directory: ./build
+      run: |
+        echo "Creating checksums..."
+        sha256sum * > checksums.txt
+        cat checksums.txt
+    
+    - name: Create release notes
+      id: release_notes
+      run: |
+        cat > release_notes.md << EOF
+        # OIDC Tool Go Implementation ${{ steps.build_vars.outputs.VERSION }}
+        
+        ## What's included
+        
+        This release contains pre-built binaries for multiple platforms:
+        
+        - **Linux**: \`oidc-tool-linux-amd64\`
+        - **Windows**: \`oidc-tool-windows-amd64.exe\`
+        - **macOS**: \`oidc-tool-darwin-amd64\`, \`oidc-tool-darwin-arm64\`
+        
+        ## Installation
+        
+        1. Download the appropriate binary for your platform
+        2. Make it executable (Linux/macOS): \`chmod +x oidc-tool-*\`
+        3. Move to a directory in your PATH (optional)
+        
+        ## Usage
+        
+        \`\`\`bash
+        # Get a token
+        ./oidc-tool token --authority https://your-oidc-provider.com --client-id your-client-id --scope openid
+        
+        # Show version
+        ./oidc-tool version
+        
+        # Show cache info
+        ./oidc-tool cache-info
+        
+        # Clear cache
+        ./oidc-tool clear-cache
+        \`\`\`
+        
+        ## Build Information
+        
+        - **Version**: ${{ steps.build_vars.outputs.VERSION }}
+        - **Commit**: ${{ steps.build_vars.outputs.COMMIT_HASH }}
+        - **Built**: ${{ steps.build_vars.outputs.BUILD_TIME }}
+        - **Go Version**: $(go version | cut -d' ' -f3)
+        
+        ## Verification
+        
+        You can verify the integrity of the downloaded files using the provided \`checksums.txt\` file:
+        
+        \`\`\`bash
+        sha256sum -c checksums.txt
+        \`\`\`
+        EOF
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.build_vars.outputs.VERSION }}
+        name: OIDC Tool Go ${{ steps.build_vars.outputs.VERSION }}
+        body_path: release_notes.md
+        files: |
+          build/oidc-tool-linux-amd64
+          build/oidc-tool-windows-amd64.exe
+          build/oidc-tool-darwin-amd64
+          build/oidc-tool-darwin-arm64
+          build/checksums.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Output release URL
+      run: |
+        echo "Release created successfully!"
+        echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.build_vars.outputs.VERSION }}"

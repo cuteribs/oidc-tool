@@ -7,6 +7,13 @@ import (
 	"os"
 )
 
+// Build-time variables injected via ldflags
+var (
+	Version    = "dev"
+	CommitHash = "unknown"
+	BuildTime  = "unknown"
+)
+
 func main() {
 	// Check if no arguments provided
 	if len(os.Args) < 2 {
@@ -23,7 +30,9 @@ func main() {
 		printUsage()
 		return
 	case "version", "--version", "-version":
-		fmt.Println("OIDC Tool Go Implementation v1.0.0")
+		fmt.Printf("OIDC Tool Go Implementation %s\n", Version)
+		fmt.Printf("Commit: %s\n", CommitHash)
+		fmt.Printf("Built: %s\n", BuildTime)
 		return
 	case "cache-info":
 		tokenCache := NewTokenCache()
@@ -64,7 +73,9 @@ func main() {
 	}
 
 	if version {
-		fmt.Println("OIDC Tool Go Implementation v1.0.0")
+		fmt.Printf("OIDC Tool Go Implementation %s\n", Version)
+		fmt.Printf("Commit: %s\n", CommitHash)
+		fmt.Printf("Built: %s\n", BuildTime)
 		return
 	}
 
