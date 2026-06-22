@@ -29,12 +29,14 @@ func main() {
 
 func handleTokenCommand() {
 	var authority, clientID, scope, redirectURI string
+	var listenPort int
 
 	fs := flag.NewFlagSet("token", flag.ExitOnError)
 	fs.StringVar(&authority, "authority", "", "OIDC authority URL")
 	fs.StringVar(&clientID, "client-id", "", "OIDC client ID")
 	fs.StringVar(&scope, "scope", "", "Requested scope")
 	fs.StringVar(&redirectURI, "redirect-uri", "http://localhost:5000/signin-oidc", "Redirect URI")
+	fs.IntVar(&listenPort, "listen-port", 0, "Port to listen on (overrides port derived from redirect-uri)")
 
 	fs.Parse(os.Args[2:])
 
@@ -44,7 +46,7 @@ func handleTokenCommand() {
 		os.Exit(1)
 	}
 
-	if err := acquireToken(authority, clientID, scope, redirectURI); err != nil {
+	if err := acquireToken(authority, clientID, scope, redirectURI, listenPort); err != nil {
 		log.Fatalf("Error: %v", err)
 	}
 }
@@ -64,6 +66,7 @@ Token Flags:
   --client-id string     OIDC client ID  
   --scope string         Requested scope
   --redirect-uri string  Redirect URI (default: http://localhost:5000/signin-oidc)
+  --listen-port int      Port to listen on (overrides port derived from redirect-uri)
 
 Example:
   %s token --authority "https://demo.duendesoftware.com" --client-id "interactive.public" --scope "openid profile"

@@ -1,130 +1,146 @@
-using System.CommandLine;
-using System.Text;
-using System.Text.Json;
-using System.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.CommandLine;
 
 namespace OidcTool;
 
 class Program
 {
-    static async Task<int> Main(string[] args)
-    {
-        var authorityOption = new Option<string>(
-            name: "--authority",
-            description: "The OIDC authority URL")
-        {
-            IsRequired = true
-        };
+	static async Task<int> Main(string[] args)
+	{
+		var authorityOption = new Option<string>("--authority")
+		{
+			Description = "The OIDC authority URL",
+			Required = true
+		};
 
-        var clientIdOption = new Option<string>(
-            name: "--client-id",
-            description: "The OIDC client ID")
-        {
-            IsRequired = true
-        };
+		var clientIdOption = new Option<string>("--client-id")
+		{
+			Description = "The OIDC client ID",
+			Required = true
+		};
 
-        var scopeOption = new Option<string>(
-            name: "--scope",
-            description: "The requested scope")
-        {
-            IsRequired = true
-        };
+		var scopeOption = new Option<string>("--scope")
+		{
+			Description = "The requested scope",
+			Required = true
+		};
 
-        var redirectUriOption = new Option<string>(
-            name: "--redirect-uri",
-            description: "The OIDC redirect URI",
-            getDefaultValue: () => "http://localhost:5000/signin-oidc");
+		var redirectUriOption = new Option<string>("--redirect-uri")
+		{
+			Description = "The OIDC redirect URI",
+			DefaultValueFactory = _ => "http://localhost:5000/signin-oidc",
+		};
 
-        // Main token command
-        var tokenCommand = new Command("token", "Acquire an access token")
-        {
-            authorityOption,
-            clientIdOption,
-            scopeOption,
-            redirectUriOption
-        };
+		var listenPortOption = new Option<int>("--listen-port")
+		{
+			Description = "Port to listen on (overrides port derived from redirect-uri)",
+			DefaultValueFactory = _ => 0
+		};
 
-        tokenCommand.SetHandler(async (authority, clientId, scope, redirectUri) =>
-        {
-            var host = CreateHost();
-            var oidcService = host.Services.GetRequiredService<OidcService>();
-            await oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri);
-        }, authorityOption, clientIdOption, scopeOption, redirectUriOption);
+		// Main token command
+		var tokenCommand = new Command("token", "Acquire an access token")
+		{
+			authorityOption,
+			clientIdOption,
+			scopeOption,
+			redirectUriOption,
+			listenPortOption
+		};
 
-        // Cache info command
-        var cacheInfoCommand = new Command("cache-info", "Display information about the token cache");
-        cacheInfoCommand.SetHandler(() =>
-        {
-            var host = CreateHost();
-            var oidcService = host.Services.GetRequiredService<OidcService>();
-            oidcService.DisplayCacheInfo();
-        });
+		tokenCommand.SetAction(x =>
+		//async (authority, clientId, scope, redirectUri, listenPort) =>
+		{
+			var authority = x.GetValue(authorityOption)!;
+			var clientId = x.GetValue(clientIdOption)!;
+			var scope = x.GetValue(scopeOption)!;
+			var redirectUri = x.GetValue(redirectUriOption)!;
+			var listenPort = x.GetValue(listenPortOption);
+			var host = CreateHost();
+			var oidcService = host.Services.GetRequiredService<OidcService>();
+			return oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri, listenPort);
+		});
 
-        // Clear cache command
-        var clearCacheCommand = new Command("clear-cache", "Clear all cached tokens");
-        clearCacheCommand.SetHandler(() =>
-        {
-            var host = CreateHost();
-            var oidcService = host.Services.GetRequiredService<OidcService>();
-            oidcService.ClearCache();
-        });
+		// Cache info command
+		var cacheInfoCommand = new Command("cache-info", "Display information about the token cache");
+		cacheInfoCommand.SetAction(_ =>
+		{
+			var host = CreateHost();
+			var oidcService = host.Services.GetRequiredService<OidcService>();
+			oidcService.DisplayCacheInfo();
+		});
 
-        // Remove specific token command
-        var removeTokenCommand = new Command("remove-token", "Remove a specific token from cache")
-        {
-            authorityOption,
-            clientIdOption,
-            scopeOption,
-            redirectUriOption
-        };
+		// Clear cache command
+		var clearCacheCommand = new Command("clear-cache", "Clear all cached tokens");
+		clearCacheCommand.SetAction(_ =>
+		 {
+			 var host = CreateHost();
+			 var oidcService = host.Services.GetRequiredService<OidcService>();
+			 oidcService.ClearCache();
+		 });
 
-        removeTokenCommand.SetHandler((authority, clientId, scope, redirectUri) =>
-        {
-            var host = CreateHost();
-            var oidcService = host.Services.GetRequiredService<OidcService>();
-            oidcService.RemoveTokenFromCache(authority, clientId, scope);
-        }, authorityOption, clientIdOption, scopeOption, redirectUriOption);
+		// Remove specific token command
+		var removeTokenCommand = new Command("remove-token", "Remove a specific token from cache")
+		{
+			authorityOption,
+			clientIdOption,
+			scopeOption,
+			redirectUriOption
+		};
+		removeTokenCommand.SetAction(x =>
+		{
+			var authority = x.GetValue(authorityOption)!;
+			var clientId = x.GetValue(clientIdOption)!;
+			var scope = x.GetValue(scopeOption)!;
+			var host = CreateHost();
+			var oidcService = host.Services.GetRequiredService<OidcService>();
+			oidcService.RemoveTokenFromCache(authority, clientId, scope);
+		});
 
-        var rootCommand = new RootCommand("OIDC Tool - Acquire access tokens using implicit flow with caching")
-        {
-            tokenCommand,
-            cacheInfoCommand,
-            clearCacheCommand,
-            removeTokenCommand,
-            authorityOption,
-            clientIdOption,
-            scopeOption,
-            redirectUriOption
-        };
+		var rootCommand = new RootCommand("OIDC Tool - Acquire access tokens using implicit flow with caching")
+		{
+			tokenCommand,
+			cacheInfoCommand,
+			clearCacheCommand,
+			removeTokenCommand,
+			authorityOption,
+			clientIdOption,
+			scopeOption,
+			redirectUriOption,
+			listenPortOption
+		};
+		rootCommand.SetAction(async x =>
+		{
+			var authority = x.GetValue(authorityOption);
+			var clientId = x.GetValue(clientIdOption);
+			var scope = x.GetValue(scopeOption)!;
 
-        // For backward compatibility, if no subcommand is provided, default to token acquisition
-        rootCommand.SetHandler(async (authority, clientId, scope, redirectUri) =>
-        {
-            if (!string.IsNullOrEmpty(authority) && !string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(scope))
-            {
-                var host = CreateHost();
-                var oidcService = host.Services.GetRequiredService<OidcService>();
-                await oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri);
-            }
-            else
-            {
-                Console.WriteLine("Use 'oidc-tool --help' to see available commands.");
-            }
-        }, authorityOption, clientIdOption, scopeOption, redirectUriOption);
+			if (!string.IsNullOrEmpty(authority) && !string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(scope))
+			{
+				var redirectUri = x.GetValue(redirectUriOption)!;
+				var listenPort = x.GetValue(listenPortOption);
+				var host = CreateHost();
+				var oidcService = host.Services.GetRequiredService<OidcService>();
+				await oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri, listenPort);
+			}
+			else
+			{
+				Console.WriteLine("Use 'oidc-tool --help' to see available commands.");
+			}
+		});
 
-        return await rootCommand.InvokeAsync(args);
-    }
+		var result = rootCommand.Parse(args);
+		return await result.InvokeAsync();
+	}
 
-    private static IHost CreateHost()
-    {
-        return Host.CreateDefaultBuilder()
-            .ConfigureServices(services =>
-            {
-                services.AddHttpClient();
-                services.AddSingleton<OidcService>();
-            })
-            .Build();
-    }
+	private static IHost CreateHost()
+	{
+		return Host.CreateDefaultBuilder()
+			.ConfigureServices(services =>
+			{
+				services.AddHttpClient();
+				services.AddSingleton<OidcService>();
+			})
+			.Build();
+	}
 }

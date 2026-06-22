@@ -18,7 +18,7 @@ public class OidcService
         _tokenCache = new TokenCache();
     }
 
-    public async Task AcquireTokenAsync(string authority, string clientId, string scope, string redirectUri)
+    public async Task AcquireTokenAsync(string authority, string clientId, string scope, string redirectUri, int listenPort = 0)
     {
         try
         {
@@ -27,6 +27,10 @@ public class OidcService
             Console.WriteLine($"Client ID: {clientId}");
             Console.WriteLine($"Scope: {scope}");
             Console.WriteLine($"Redirect URI: {redirectUri}");
+            if (listenPort > 0)
+            {
+                Console.WriteLine($"Listen Port: {listenPort}");
+            }
             Console.WriteLine();
 
             // Check cache first
@@ -77,13 +81,15 @@ public class OidcService
             try
             {
                 var uri = new Uri(redirectUri);
-                var prefix = $"{uri.Scheme}://{uri.Host}:{uri.Port}/";
+                var port = listenPort > 0 ? listenPort : uri.Port;
+                var prefix = $"{uri.Scheme}://{uri.Host}:{port}/";
                 callbackListener.Prefixes.Add(prefix);
             }
             catch
             {
                 // Fallback to default
-                callbackListener.Prefixes.Add("http://localhost:5000/");
+                var port = listenPort > 0 ? listenPort : 5000;
+                callbackListener.Prefixes.Add($"http://localhost:{port}/");
             }
             
             callbackListener.Start();
