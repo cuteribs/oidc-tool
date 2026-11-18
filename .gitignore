@@ -1,3 +1,5 @@
 ﻿**/bin
 **/obj
 **/.vs
+**/test-demo.bat
+**/test-demo.sh

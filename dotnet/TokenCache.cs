@@ -194,40 +194,26 @@ public class TokenCache
 
 public static class JwtTokenHelper
 {
-    public static string? ExtractClaim(string jwtToken, string claimName)
+    // ponytail: payload decode only, no signature check; claims are displayed, never trusted.
+    public static JsonElement? DecodePayload(string jwtToken)
     {
         try
         {
-            // JWT tokens have three parts separated by dots: header.payload.signature
             var parts = jwtToken.Split('.');
             if (parts.Length != 3)
                 return null;
-
-            // Decode the payload (second part)
-            var payload = parts[1];
-            
-            // Add padding if necessary for base64 decoding
-            while (payload.Length % 4 != 0)
-            {
-                payload += "=";
-            }
-
-            // Decode from base64url to bytes
-            var payloadBytes = Convert.FromBase64String(payload.Replace('-', '+').Replace('_', '/'));
-            var payloadJson = Encoding.UTF8.GetString(payloadBytes);
-
-            // Parse JSON and extract the claim
-            var jsonDocument = JsonDocument.Parse(payloadJson);
-            if (jsonDocument.RootElement.TryGetProperty(claimName, out var claimElement))
-            {
-                return claimElement.GetString();
-            }
+            var payload = parts[1].TrimEnd('=').Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+            return JsonSerializer.Deserialize<JsonElement>(Convert.FromBase64String(payload));
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Warning: Could not extract '{claimName}' from token: {ex.Message}");
+            return null;
         }
-
-        return null;
     }
+
+    public static string? ExtractClaim(string jwtToken, string claimName) =>
+        DecodePayload(jwtToken) is { } payload && payload.TryGetProperty(claimName, out var claim) && claim.ValueKind == JsonValueKind.String
+            ? claim.GetString()
+            : null;
 }

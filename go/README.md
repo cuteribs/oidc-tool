@@ -95,6 +95,30 @@ The tool still supports the old syntax for direct token acquisition:
 ./oidc-tool token --authority "https://demo.duendesoftware.com" --client-id "interactive.public" --scope "openid profile email api"
 ```
 
+### Intercepting a real redirect URI
+
+If `--redirect-uri` is not `http://localhost...` (e.g. `https://myapp.example.com/signin-oidc`), the tool
+captures the callback without touching hosts files or the system certificate store:
+
+1. Generates a throwaway in-memory TLS certificate for the redirect host
+2. Listens on `127.0.0.1` (random port, or `--listen-port`)
+3. Launches Edge or Chrome with a temporary profile and
+   `--host-resolver-rules` (maps the redirect host to the local listener) plus
+   `--ignore-certificate-errors-spki-list` (trusts only that certificate, only in that window)
+4. Reads `id_token` / `access_token` from the `form_post` callback, checks `state` and `nonce`,
+   prints both tokens with their decoded claims (signatures are not validated), then closes the browser
+   and deletes the temporary profile
+
+No admin rights are needed. The temporary profile has no SSO session, so you sign in each time.
+The browser runs with `--no-proxy-server`, so the IdP must be reachable without a proxy. Its fresh profile loads none of your own extensions; policy-installed extensions still load.
+
+```bash
+./oidc-tool token --authority "https://login.microsoftonline.com/<tenant>/v2.0" --client-id "<client-id>" \
+  --scope "openid profile" --redirect-uri "https://myapp.example.com/signin-oidc"
+```
+
+`--response-type` defaults to `id_token token`; use `--response-type token` if the client is not allowed to issue ID tokens.
+
 ## How it works
 
 1. **Discovery**: Fetches the OIDC configuration from the authority's `.well-known/openid_configuration` endpoint

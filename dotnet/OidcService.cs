@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
@@ -18,7 +19,7 @@ public class OidcService
         _tokenCache = new TokenCache();
     }
 
-    public async Task AcquireTokenAsync(string authority, string clientId, string scope, string redirectUri, int listenPort = 0)
+    public async Task AcquireTokenAsync(string authority, string clientId, string scope, string redirectUri, int listenPort = 0, string responseType = "id_token token")
     {
         try
         {
@@ -64,152 +65,54 @@ public class OidcService
             Console.WriteLine($"Authorization Endpoint: {discoveryDocument.AuthorizationEndpoint}");
             Console.WriteLine();
 
-            // Generate state parameter for security
+            // Generate state and nonce parameters for security
             var state = Guid.NewGuid().ToString("N");
-            
+            var nonce = Guid.NewGuid().ToString("N");
+
             // Build authorization URL
-            var authUrl = BuildAuthorizationUrl(discoveryDocument.AuthorizationEndpoint, clientId, scope, state, redirectUri);
-            
-            Console.WriteLine("Opening browser for authentication...");
+            var authUrl = BuildAuthorizationUrl(discoveryDocument.AuthorizationEndpoint, clientId, scope, responseType, state, nonce, redirectUri);
+
             Console.WriteLine($"Authorization URL: {authUrl}");
             Console.WriteLine();
 
-            // Start local HTTP listener for callback
-            var callbackListener = new HttpListener();
-            
-            // Parse redirect URI to get the correct prefix
-            try
-            {
-                var uri = new Uri(redirectUri);
-                var port = listenPort > 0 ? listenPort : uri.Port;
-                var prefix = $"{uri.Scheme}://{uri.Host}:{port}/";
-                callbackListener.Prefixes.Add(prefix);
-            }
-            catch
-            {
-                // Fallback to default
-                var port = listenPort > 0 ? listenPort : 5000;
-                callbackListener.Prefixes.Add($"http://localhost:{port}/");
-            }
-            
-            callbackListener.Start();
+            (int, string) Respond(NameValueCollection p) => ValidateCallback(p, state, nonce) is { } err
+                ? (400, $"<html><body><h1>Error</h1><p>{WebUtility.HtmlEncode(err)}</p></body></html>")
+                : (200, $"<html><body><h1>Success</h1><p>Token received. You can close this window.</p><div style='width:100%'><code>{WebUtility.HtmlEncode(p["access_token"] ?? p["id_token"])}</code></div></body></html>");
 
-            // Open browser
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = authUrl,
-                UseShellExecute = true
-            });
+            // http://localhost uses the default browser; anything else is intercepted in a private Edge/Chrome instance
+            var uri = new Uri(redirectUri);
+            var callback = uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback
+                ? await ListenLocalAsync(uri, listenPort, authUrl, Respond)
+                : await CallbackInterceptor.RunAsync(uri, listenPort, authUrl, Respond);
 
-            Console.WriteLine("Waiting for callback...");
-            Console.WriteLine("Please complete the authentication in your browser.");
-            Console.WriteLine();
-
-            // Wait for callback
-            var context = await callbackListener.GetContextAsync();
-            var request = context.Request;
-            var response = context.Response;
-
-            // Parse callback parameters
-            System.Collections.Specialized.NameValueCollection? formParams = null;
-            string? returnedState = null;
-            string? accessToken = null;
-            string? error = null;
-            string? errorDescription = null;
-            string? tokenType = null;
-            string? expiresIn = null;
-
-            if (request.HttpMethod == "POST" && request.HasEntityBody)
-            {
-                // Read form data from POST body
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var formData = await reader.ReadToEndAsync();
-                formParams = HttpUtility.ParseQueryString(formData);
-                
-                returnedState = formParams["state"];
-                accessToken = formParams["access_token"];
-                error = formParams["error"];
-                errorDescription = formParams["error_description"];
-                tokenType = formParams["token_type"];
-                expiresIn = formParams["expires_in"];
-            }
-            else
-            {
-                // Fallback to query parameters for GET requests
-                var queryParams = HttpUtility.ParseQueryString(request.Url?.Query ?? string.Empty);
-                returnedState = queryParams["state"];
-                accessToken = queryParams["access_token"];
-                error = queryParams["error"];
-                errorDescription = queryParams["error_description"];
-                tokenType = queryParams["token_type"];
-                expiresIn = queryParams["expires_in"];
-            }
-
-            // Send response to browser
-            string responseString;
-            if (!string.IsNullOrEmpty(error))
-            {
-                responseString = $"<html><body><h1>Error</h1><p>{error}: {errorDescription}</p></body></html>";
-                response.StatusCode = 400;
-            }
-            else if (string.IsNullOrEmpty(accessToken))
-            {
-                responseString = "<html><body><h1>Error</h1><p>No access token received</p></body></html>";
-                response.StatusCode = 400;
-            }
-            else if (returnedState != state)
-            {
-                responseString = "<html><body><h1>Error</h1><p>Invalid state parameter</p></body></html>";
-                response.StatusCode = 400;
-            }
-            else
-            {
-                responseString = $"<html><body><h1>Success</h1><p>Access token received. You can close this window.</p><div style='width:100%'><code>{accessToken}</code></div></body></html>";
-                response.StatusCode = 200;
-            }
-
-            byte[] buffer = Encoding.UTF8.GetBytes(responseString);
-            response.ContentLength64 = buffer.Length;
-            response.OutputStream.Write(buffer, 0, buffer.Length);
-            response.OutputStream.Close();
-            callbackListener.Stop();
-
-            // Handle result
-            if (!string.IsNullOrEmpty(error))
+            if (ValidateCallback(callback, state, nonce) is { } error)
             {
                 Console.WriteLine($"Error: {error}");
-                if (!string.IsNullOrEmpty(errorDescription))
-                {
-                    Console.WriteLine($"Description: {errorDescription}");
-                }
                 return;
             }
 
-            if (returnedState != state)
-            {
-                Console.WriteLine("Error: State parameter mismatch");
-                return;
-            }
+            var idToken = callback["id_token"];
+            var accessToken = callback["access_token"];
+
+            Console.WriteLine("✅ Token(s) acquired successfully!");
+            PrintToken("ID Token", idToken);
+            PrintToken("Access Token", accessToken);
+            Console.WriteLine();
 
             if (string.IsNullOrEmpty(accessToken))
             {
-                Console.WriteLine("Error: No access token received");
                 return;
             }
 
-            Console.WriteLine("✅ Access token acquired successfully!");
-            Console.WriteLine($"Access Token: {accessToken}");
-            Console.WriteLine();
-
             // Cache the token
-            var expiresInSeconds = int.TryParse(expiresIn, out var expiry) ? expiry : 3600; // Default 1 hour
+            var expiresInSeconds = int.TryParse(callback["expires_in"], out var expiry) ? expiry : 3600; // Default 1 hour
             var tokenCacheEntry = new TokenCacheEntry
             {
                 AccessToken = accessToken,
                 Authority = authority,
                 ClientId = clientId,
                 Scope = scope,
-                TokenType = tokenType ?? "Bearer",
+                TokenType = callback["token_type"] ?? "Bearer",
                 ExpiresAt = DateTime.UtcNow.AddSeconds(expiresInSeconds)
             };
 
@@ -251,23 +154,81 @@ public class OidcService
         }
     }
 
-    private string BuildAuthorizationUrl(string authorizationEndpoint, string clientId, string scope, string state, string redirectUri)
+    private string BuildAuthorizationUrl(string authorizationEndpoint, string clientId, string scope, string responseType, string state, string nonce, string redirectUri)
     {
         var queryParams = new Dictionary<string, string>
         {
-            ["response_type"] = "token",
+            ["response_type"] = responseType,
             ["response_mode"] = "form_post",
             ["client_id"] = clientId,
             ["redirect_uri"] = redirectUri,
             ["scope"] = scope,
             ["state"] = state,
-            ["nonce"] = Guid.NewGuid().ToString("N")
+            ["nonce"] = nonce
         };
 
         var query = string.Join("&", queryParams.Select(kvp => 
             $"{HttpUtility.UrlEncode(kvp.Key)}={HttpUtility.UrlEncode(kvp.Value)}"));
 
         return $"{authorizationEndpoint}?{query}";
+    }
+
+    private static string? ValidateCallback(NameValueCollection p, string state, string nonce)
+    {
+        if (!string.IsNullOrEmpty(p["error"]))
+            return string.IsNullOrEmpty(p["error_description"]) ? p["error"] : $"{p["error"]}: {p["error_description"]}";
+        if (p["state"] != state)
+            return "State parameter mismatch";
+        if (string.IsNullOrEmpty(p["id_token"]) && string.IsNullOrEmpty(p["access_token"]))
+            return "No token received";
+        if (!string.IsNullOrEmpty(p["id_token"]) && JwtTokenHelper.ExtractClaim(p["id_token"]!, "nonce") != nonce)
+            return "Nonce mismatch";
+        return null;
+    }
+
+    private static void PrintToken(string label, string? token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return;
+        Console.WriteLine();
+        Console.WriteLine($"{label}: {token}");
+        // Opaque (non-JWT) access tokens are printed as-is.
+        if (JwtTokenHelper.DecodePayload(token) is { } claims)
+            Console.WriteLine($"{label} claims:\n{JsonSerializer.Serialize(claims, new JsonSerializerOptions { WriteIndented = true })}");
+    }
+
+    private static async Task<NameValueCollection> ListenLocalAsync(Uri uri, int listenPort, string authUrl, Func<NameValueCollection, (int Status, string Html)> respond)
+    {
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"{uri.Scheme}://{uri.Host}:{(listenPort > 0 ? listenPort : uri.Port)}/");
+        listener.Start();
+
+        Console.WriteLine("Opening browser for authentication...");
+        Process.Start(new ProcessStartInfo { FileName = authUrl, UseShellExecute = true });
+        Console.WriteLine("Waiting for callback...");
+        Console.WriteLine("Please complete the authentication in your browser.");
+        Console.WriteLine();
+
+        var context = await listener.GetContextAsync();
+        var request = context.Request;
+        NameValueCollection p;
+        if (request.HttpMethod == "POST" && request.HasEntityBody)
+        {
+            using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
+            p = HttpUtility.ParseQueryString(await reader.ReadToEndAsync());
+        }
+        else
+        {
+            p = HttpUtility.ParseQueryString(request.Url?.Query ?? string.Empty);
+        }
+
+        var (status, html) = respond(p);
+        var buffer = Encoding.UTF8.GetBytes(html);
+        context.Response.StatusCode = status;
+        context.Response.ContentLength64 = buffer.Length;
+        context.Response.OutputStream.Write(buffer, 0, buffer.Length);
+        context.Response.OutputStream.Close();
+        return p;
     }
 
     private async Task DisplayTokenInfoAsync(string accessToken, DiscoveryDocument discoveryDocument)

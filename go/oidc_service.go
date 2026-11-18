@@ -2,8 +2,8 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -23,12 +23,13 @@ type discoveryDoc struct {
 }
 
 type tokenInfo struct {
+	IDToken     string
 	AccessToken string
 	ExpiresIn   string
 	ExpiresAt   *time.Time
 }
 
-func acquireToken(authority, clientID, scope, redirectURI string, listenPort int) error {
+func acquireToken(authority, clientID, scope, redirectURI, responseType string, listenPort int) error {
 	for {
 		fmt.Printf("Getting token from: %s\n", authority)
 
@@ -43,33 +44,32 @@ func acquireToken(authority, clientID, scope, redirectURI string, listenPort int
 		nonce := randomString(16)
 
 		// Build auth URL
-		authURL := buildAuthURL(authEndpoint, clientID, scope, redirectURI, state, nonce)
+		authURL := buildAuthURL(authEndpoint, clientID, scope, redirectURI, responseType, state, nonce)
 
-		// Start callback server
+		// Start callback server and open browser
 		callbackChan := make(chan map[string]string, 1)
-		server := startServer(redirectURI, listenPort, callbackChan)
-
-		// Open browser
-		fmt.Println("Opening browser...")
-		if err := openBrowser(authURL); err != nil {
-			fmt.Printf("Open manually: %s\n", authURL)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleCallback(w, r, callbackChan)
+			}),
+		}
+		cleanup, err := listenAndOpen(server, redirectURI, listenPort, authURL)
+		if err != nil {
+			return err
 		}
 
 		// Wait for callback
 		var tokenResult *tokenInfo
 		select {
 		case params := <-callbackChan:
-			tokenResult, err = processCallback(params, state)
-			if err != nil {
-				server.Shutdown(context.Background())
-				return err
-			}
+			tokenResult, err = processCallback(params, state, nonce)
 		case <-time.After(5 * time.Minute):
-			server.Shutdown(context.Background())
-			return fmt.Errorf("timeout waiting for callback")
+			err = fmt.Errorf("timeout waiting for callback")
 		}
-
-		server.Shutdown(context.Background())
+		cleanup()
+		if err != nil {
+			return err
+		}
 
 		// Display token information
 		displayTokenInfo(tokenResult)
@@ -104,9 +104,9 @@ func getAuthEndpoint(authority string) (string, error) {
 	return doc.AuthorizationEndpoint, nil
 }
 
-func buildAuthURL(endpoint, clientID, scope, redirectURI, state, nonce string) string {
+func buildAuthURL(endpoint, clientID, scope, redirectURI, responseType, state, nonce string) string {
 	params := url.Values{
-		"response_type": {"token"},
+		"response_type": {responseType},
 		"response_mode": {"form_post"},
 		"client_id":     {clientID},
 		"redirect_uri":  {redirectURI},
@@ -118,7 +118,7 @@ func buildAuthURL(endpoint, clientID, scope, redirectURI, state, nonce string) s
 	return endpoint + "?" + params.Encode()
 }
 
-func processCallback(params map[string]string, expectedState string) (*tokenInfo, error) {
+func processCallback(params map[string]string, expectedState, expectedNonce string) (*tokenInfo, error) {
 	if err := params["error"]; err != "" {
 		desc := params["error_description"]
 		if desc != "" {
@@ -131,14 +131,23 @@ func processCallback(params map[string]string, expectedState string) (*tokenInfo
 		return nil, fmt.Errorf("state mismatch")
 	}
 
-	token := params["access_token"]
-	if token == "" {
-		return nil, fmt.Errorf("no access token received")
+	result := &tokenInfo{
+		IDToken:     params["id_token"],
+		AccessToken: params["access_token"],
+		ExpiresIn:   params["expires_in"],
+	}
+	if result.IDToken == "" && result.AccessToken == "" {
+		return nil, fmt.Errorf("no token received")
 	}
 
-	result := &tokenInfo{
-		AccessToken: token,
-		ExpiresIn:   params["expires_in"],
+	if result.IDToken != "" {
+		claims, err := decodeJWT(result.IDToken)
+		if err != nil {
+			return nil, fmt.Errorf("invalid id_token: %w", err)
+		}
+		if claims["nonce"] != expectedNonce {
+			return nil, fmt.Errorf("nonce mismatch")
+		}
 	}
 
 	// Calculate expiration time if available
@@ -152,7 +161,7 @@ func processCallback(params map[string]string, expectedState string) (*tokenInfo
 	return result, nil
 }
 
-func startServer(redirectURI string, listenPort int, callbackChan chan<- map[string]string) *http.Server {
+func listenAddr(redirectURI string, listenPort int) string {
 	// Extract port from redirect URI
 	addr := ":5000" // default
 	if u, err := url.Parse(redirectURI); err == nil && u.Host != "" {
@@ -175,15 +184,7 @@ func startServer(redirectURI string, listenPort int, callbackChan chan<- map[str
 		addr = fmt.Sprintf("%s:%d", host, listenPort)
 	}
 
-	server := &http.Server{
-		Addr: addr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handleCallback(w, r, callbackChan)
-		}),
-	}
-
-	go server.ListenAndServe()
-	return server
+	return addr
 }
 
 func handleCallback(w http.ResponseWriter, r *http.Request, callbackChan chan<- map[string]string) {
@@ -212,12 +213,11 @@ func handleCallback(w http.ResponseWriter, r *http.Request, callbackChan chan<- 
 	}
 
 	// Response to browser
-	token := params["access_token"]
 	errMsg := params["error"]
 
 	if errMsg != "" {
 		fmt.Fprintf(w, "<h1>Error</h1><p>%s</p>", errMsg)
-	} else if token == "" {
+	} else if params["access_token"] == "" && params["id_token"] == "" {
 		fmt.Fprint(w, "<h1>Error</h1><p>No token received</p>")
 	} else {
 		fmt.Fprint(w, "<h1>Success!</h1><p>Token received. You can close this window.</p>")
@@ -247,11 +247,40 @@ func openBrowser(url string) error {
 }
 
 func displayTokenInfo(token *tokenInfo) {
-	fmt.Printf("\n✅ Success! Access Token: %s\n", token.AccessToken)
+	fmt.Println("\n✅ Success!")
+	printToken("ID Token", token.IDToken)
+	printToken("Access Token", token.AccessToken)
 
 	if token.ExpiresAt != nil {
-		fmt.Printf("Expires: %s\n", token.ExpiresAt.Format("2006-01-02 15:04:05"))
+		fmt.Printf("\nExpires: %s\n", token.ExpiresAt.Format("2006-01-02 15:04:05"))
 	}
+}
+
+func printToken(label, token string) {
+	if token == "" {
+		return
+	}
+	fmt.Printf("\n%s: %s\n", label, token)
+	// Opaque (non-JWT) access tokens are printed as-is.
+	if claims, err := decodeJWT(token); err == nil {
+		b, _ := json.MarshalIndent(claims, "", "  ")
+		fmt.Printf("%s claims:\n%s\n", label, b)
+	}
+}
+
+// ponytail: payload decode only, no signature check; claims are displayed, never trusted.
+// Add JWKS validation if this ever gates access to something.
+func decodeJWT(token string) (map[string]any, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("not a JWT")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]any
+	return claims, json.Unmarshal(payload, &claims)
 }
 
 func promptForAction() bool {

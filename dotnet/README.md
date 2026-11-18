@@ -65,6 +65,27 @@ dotnet run -- --authority <AUTHORITY> --client-id <CLIENT_ID> --scope <SCOPE>
 - `--authority`: The OIDC authority URL (e.g., `https://login.microsoftonline.com/common/v2.0`)
 - `--client-id`: The OIDC client ID registered with the authority
 - `--scope`: The requested scope (e.g., `openid profile email`)
+- `--redirect-uri`: The redirect URI registered for the client (default `http://localhost:5000/signin-oidc`)
+- `--response-type`: The OIDC `response_type` (default `id_token token`; use `token` for access token only)
+- `--listen-port`: Local port to listen on (default: redirect URI port, or random when intercepting)
+
+### Intercepting a real redirect URI
+
+If `--redirect-uri` is not a plain `http://localhost` URI (e.g. `https://myapp.example.com/signin-oidc`), the tool captures the callback without touching the hosts file or the certificate store, and without admin rights:
+
+1. Listens on `127.0.0.1` (random port, or `--listen-port`) and, for `https`, serves a throwaway self-signed certificate generated in memory.
+2. Launches a private Edge (or Chrome) instance with a temporary profile and
+   `--host-resolver-rules=MAP myapp.example.com:443 127.0.0.1:<port>`, `--ignore-certificate-errors-spki-list=<hash of that certificate>` and `--no-proxy-server`.
+   The fresh profile loads none of your own extensions; policy-installed extensions still load.
+   Only that browser instance resolves the host locally and trusts only that one key.
+3. Receives the `form_post` callback, checks `state` and the id_token `nonce`, and prints both tokens with decoded claims (signatures are not verified).
+4. Closes the browser and deletes the temporary profile.
+
+```bash
+dotnet run -- token --authority <AUTHORITY> --client-id <CLIENT_ID> --scope "openid profile" --redirect-uri https://myapp.example.com/signin-oidc
+```
+
+Requires Edge or Chrome. Sign-in happens in a fresh profile, so you will need to log in each time.
 
 ### Example
 

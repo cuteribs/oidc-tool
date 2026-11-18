@@ -28,23 +28,30 @@ class Program
 
 		var redirectUriOption = new Option<string>("--redirect-uri")
 		{
-			Description = "The OIDC redirect URI",
+			Description = "The OIDC redirect URI (non-localhost or https URIs are intercepted in a private Edge/Chrome window)",
 			DefaultValueFactory = _ => "http://localhost:5000/signin-oidc",
+		};
+
+		var responseTypeOption = new Option<string>("--response-type")
+		{
+			Description = "The OIDC response_type",
+			DefaultValueFactory = _ => "id_token token",
 		};
 
 		var listenPortOption = new Option<int>("--listen-port")
 		{
-			Description = "Port to listen on (overrides port derived from redirect-uri)",
+			Description = "Port to listen on (overrides port derived from redirect-uri; random when intercepting)",
 			DefaultValueFactory = _ => 0
 		};
 
 		// Main token command
-		var tokenCommand = new Command("token", "Acquire an access token")
+		var tokenCommand = new Command("token", "Acquire tokens")
 		{
 			authorityOption,
 			clientIdOption,
 			scopeOption,
 			redirectUriOption,
+			responseTypeOption,
 			listenPortOption
 		};
 
@@ -56,9 +63,10 @@ class Program
 			var scope = x.GetValue(scopeOption)!;
 			var redirectUri = x.GetValue(redirectUriOption)!;
 			var listenPort = x.GetValue(listenPortOption);
+			var responseType = x.GetValue(responseTypeOption)!;
 			var host = CreateHost();
 			var oidcService = host.Services.GetRequiredService<OidcService>();
-			return oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri, listenPort);
+			return oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri, listenPort, responseType);
 		});
 
 		// Cache info command
@@ -107,6 +115,7 @@ class Program
 			clientIdOption,
 			scopeOption,
 			redirectUriOption,
+			responseTypeOption,
 			listenPortOption
 		};
 		rootCommand.SetAction(async x =>
@@ -119,9 +128,10 @@ class Program
 			{
 				var redirectUri = x.GetValue(redirectUriOption)!;
 				var listenPort = x.GetValue(listenPortOption);
+				var responseType = x.GetValue(responseTypeOption)!;
 				var host = CreateHost();
 				var oidcService = host.Services.GetRequiredService<OidcService>();
-				await oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri, listenPort);
+				await oidcService.AcquireTokenAsync(authority, clientId, scope, redirectUri, listenPort, responseType);
 			}
 			else
 			{
